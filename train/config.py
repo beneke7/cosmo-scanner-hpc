@@ -29,11 +29,18 @@ MODEL_DIR = "train/models"
 # TRAINING HYPERPARAMETERS
 # =============================================================================
 
-BATCH_SIZE = 32
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-4
-NUM_EPOCHS = 100
-PATIENCE = 10  # Early stopping patience
+# Optimized for RTX 5090 (32GB VRAM)
+BATCH_SIZE = 128  # Reduced for more stable training
+LEARNING_RATE = 3e-4  # Lower LR for stability
+WEIGHT_DECAY = 1e-3  # Increased regularization
+NUM_EPOCHS = 15
+PATIENCE = 5  # Early stopping patience
+
+# Dropout rates
+CONV_DROPOUT = 0.1  # Dropout after conv blocks
+FC_DROPOUT = 0.4  # Dropout in FC layers
+GRADIENT_ACCUMULATION_STEPS = 1  # Can increase if OOM occurs
+USE_AMP = True  # Automatic Mixed Precision for faster training
 
 # Data split ratios
 TRAIN_RATIO = 0.7
@@ -48,28 +55,31 @@ LR_TOTAL_ITERS = NUM_EPOCHS
 # Random seed
 SEED = 42
 
-# Workers
-NUM_WORKERS = 4
+# Workers - optimized for 60 CPU cores
+NUM_WORKERS = 16  # Increased from 4 to utilize multi-core CPU
+PREFETCH_FACTOR = 4  # Prefetch batches for faster data loading
+PERSISTENT_WORKERS = True  # Keep workers alive between epochs
 
 # =============================================================================
 # MODEL ARCHITECTURE
 # =============================================================================
 
-# Input: 128x128 grayscale image
-IMAGE_SIZE = 128
+# Input: 256x256 grayscale image
+IMAGE_SIZE = 256
 IN_CHANNELS = 1
 
-# CNN Architecture
+# CNN Architecture - deeper for 256x256 images
 # Conv layers: [out_channels, kernel_size, stride, padding]
 CONV_LAYERS = [
-    (32, 5, 1, 2),   # 128 -> 128, kernel=5x5
-    (64, 5, 2, 2),   # 128 -> 64,  kernel=5x5, stride=2
-    (128, 3, 2, 1),  # 64 -> 32,   kernel=3x3, stride=2
-    (256, 3, 2, 1),  # 32 -> 16,   kernel=3x3, stride=2
+    (32, 5, 1, 2),   # 256 -> 256, kernel=5x5
+    (64, 5, 2, 2),   # 256 -> 128, kernel=5x5, stride=2
+    (128, 3, 2, 1),  # 128 -> 64,  kernel=3x3, stride=2
+    (256, 3, 2, 1),  # 64 -> 32,   kernel=3x3, stride=2
+    (512, 3, 2, 1),  # 32 -> 16,   kernel=3x3, stride=2
 ]
 
 # Fully connected layers after global average pooling
-FC_LAYERS = [128, 32]
+FC_LAYERS = [256, 64]
 
 # Output: single omega_m value
 OUTPUT_SIZE = 1
@@ -100,8 +110,9 @@ def get_device() -> torch.device:
 class CosmoDataset(Dataset):
     """Dataset loading pre-generated density fields from disk."""
     
-    def __init__(self, samples: List[Dict]):
+    def __init__(self, samples: List[Dict], augment: bool = False):
         self.samples = samples
+        self.augment = augment
     
     def __len__(self) -> int:
         return len(self.samples)
@@ -112,6 +123,18 @@ class CosmoDataset(Dataset):
         
         img = Image.open(filepath)
         field = np.array(img, dtype=np.float32) / 255.0
+        
+        # Data augmentation (physics-preserving: flips and 90-degree rotations)
+        if self.augment:
+            # Random horizontal flip
+            if np.random.random() > 0.5:
+                field = np.flip(field, axis=1).copy()
+            # Random vertical flip
+            if np.random.random() > 0.5:
+                field = np.flip(field, axis=0).copy()
+            # Random 90-degree rotation (0, 1, 2, or 3 times)
+            k = np.random.randint(0, 4)
+            field = np.rot90(field, k).copy()
         
         field_tensor = torch.from_numpy(field).unsqueeze(0)  # (1, H, W)
         omega_tensor = torch.tensor([sample['omega_m']], dtype=torch.float32)
@@ -154,28 +177,35 @@ def create_dataloaders(seed: int = SEED) -> Tuple[DataLoader, DataLoader, DataLo
     test_samples = [samples[i] for i in test_idx]
     
     train_loader = DataLoader(
-        CosmoDataset(train_samples),
+        CosmoDataset(train_samples, augment=True),  # Augmentation ON for training
         batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=NUM_WORKERS,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        prefetch_factor=PREFETCH_FACTOR,
+        persistent_workers=PERSISTENT_WORKERS
     )
     
+    # Larger batch for validation = more stable loss estimate
     val_loader = DataLoader(
-        CosmoDataset(val_samples),
-        batch_size=BATCH_SIZE,
+        CosmoDataset(val_samples, augment=False),  # No augmentation for validation
+        batch_size=BATCH_SIZE * 2,
         shuffle=False,
         num_workers=NUM_WORKERS,
-        pin_memory=True
+        pin_memory=True,
+        prefetch_factor=PREFETCH_FACTOR,
+        persistent_workers=PERSISTENT_WORKERS
     )
     
     test_loader = DataLoader(
-        CosmoDataset(test_samples),
-        batch_size=BATCH_SIZE,
+        CosmoDataset(test_samples, augment=False),  # No augmentation for test
+        batch_size=BATCH_SIZE * 2,
         shuffle=False,
         num_workers=NUM_WORKERS,
-        pin_memory=True
+        pin_memory=True,
+        prefetch_factor=PREFETCH_FACTOR,
+        persistent_workers=PERSISTENT_WORKERS
     )
     
     return train_loader, val_loader, test_loader
@@ -190,35 +220,33 @@ class CosmoNet(nn.Module):
     CNN for cosmological parameter estimation.
     
     Architecture:
-    - 4 Conv blocks with BatchNorm and ReLU
+    - 5 Conv blocks with BatchNorm, ReLU, and Dropout
     - Global Average Pooling
-    - 2 FC layers
+    - 2 FC layers with Dropout
     - Output: omega_m prediction
-    
-    Kernel sizes: 5x5 (first two), 3x3 (last two)
     """
     
     def __init__(self):
         super().__init__()
         
-        # Build conv layers
-        layers = []
+        # Build conv layers with dropout
+        self.conv_blocks = nn.ModuleList()
         in_ch = IN_CHANNELS
         
         for out_ch, kernel, stride, pad in CONV_LAYERS:
-            layers.extend([
+            block = nn.Sequential(
                 nn.Conv2d(in_ch, out_ch, kernel, stride, pad),
                 nn.BatchNorm2d(out_ch),
-                nn.ReLU(inplace=True)
-            ])
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(CONV_DROPOUT)
+            )
+            self.conv_blocks.append(block)
             in_ch = out_ch
-        
-        self.conv = nn.Sequential(*layers)
         
         # Global average pooling
         self.gap = nn.AdaptiveAvgPool2d(1)
         
-        # FC layers
+        # FC layers with dropout
         fc_layers = []
         fc_in = CONV_LAYERS[-1][0]  # Last conv output channels
         
@@ -226,7 +254,7 @@ class CosmoNet(nn.Module):
             fc_layers.extend([
                 nn.Linear(fc_in, fc_out),
                 nn.ReLU(inplace=True),
-                nn.Dropout(0.2)
+                nn.Dropout(FC_DROPOUT)
             ])
             fc_in = fc_out
         
@@ -234,7 +262,8 @@ class CosmoNet(nn.Module):
         self.fc = nn.Sequential(*fc_layers)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv(x)
+        for block in self.conv_blocks:
+            x = block(x)
         x = self.gap(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)

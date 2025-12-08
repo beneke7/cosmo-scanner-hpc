@@ -26,6 +26,7 @@ from train.config import (
     # Hyperparameters
     BATCH_SIZE, LEARNING_RATE, WEIGHT_DECAY, NUM_EPOCHS, PATIENCE,
     LR_START_FACTOR, LR_END_FACTOR, LR_TOTAL_ITERS, SEED,
+    GRADIENT_ACCUMULATION_STEPS, USE_AMP,
     # Model
     CosmoNet, count_parameters,
     # Data
@@ -76,38 +77,62 @@ def setup_logging(run_name: str) -> str:
 # =============================================================================
 
 
-def train_epoch(model, loader, criterion, optimizer, device):
-    """Train for one epoch."""
+def train_epoch(model, loader, criterion, optimizer, device, scaler=None, grad_accum_steps=1):
+    """Train for one epoch with optional mixed precision and gradient accumulation."""
     model.train()
     total_loss = 0.0
+    optimizer.zero_grad()
     
-    for fields, targets in loader:
-        fields = fields.to(device)
-        targets = targets.to(device)
+    for batch_idx, (fields, targets) in enumerate(loader):
+        fields = fields.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
         
-        optimizer.zero_grad()
-        outputs = model(fields)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
+        # Mixed precision forward pass
+        if scaler is not None:
+            with torch.amp.autocast('cuda'):
+                outputs = model(fields)
+                loss = criterion(outputs, targets)
+            loss = loss / grad_accum_steps
+            scaler.scale(loss).backward()
+            
+            # Gradient accumulation
+            if (batch_idx + 1) % grad_accum_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+        else:
+            outputs = model(fields)
+            loss = criterion(outputs, targets)
+            loss = loss / grad_accum_steps
+            loss.backward()
+            
+            if (batch_idx + 1) % grad_accum_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
         
-        total_loss += loss.item()
+        total_loss += loss.item() * grad_accum_steps
     
     return total_loss / len(loader)
 
 
-def validate(model, loader, criterion, device):
-    """Validate the model."""
+def validate(model, loader, criterion, device, scaler=None):
+    """Validate the model with optional mixed precision."""
     model.eval()
     total_loss = 0.0
     
     with torch.no_grad():
         for fields, targets in loader:
-            fields = fields.to(device)
-            targets = targets.to(device)
+            fields = fields.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
             
-            outputs = model(fields)
-            loss = criterion(outputs, targets)
+            if scaler is not None:
+                with torch.amp.autocast('cuda'):
+                    outputs = model(fields)
+                    loss = criterion(outputs, targets)
+            else:
+                outputs = model(fields)
+                loss = criterion(outputs, targets)
+            
             total_loss += loss.item()
     
     return total_loss / len(loader)
@@ -163,6 +188,11 @@ def main(run_name: str):
         total_iters=LR_TOTAL_ITERS
     )
     
+    # Mixed precision scaler
+    scaler = torch.amp.GradScaler('cuda') if USE_AMP and device.type == 'cuda' else None
+    if scaler:
+        logging.info("Using Automatic Mixed Precision (AMP)")
+    
     # Training loop
     best_val_loss = float('inf')
     patience_counter = 0
@@ -172,10 +202,11 @@ def main(run_name: str):
     
     for epoch in range(1, NUM_EPOCHS + 1):
         # Train
-        train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, device, 
+                                 scaler=scaler, grad_accum_steps=GRADIENT_ACCUMULATION_STEPS)
         
         # Validate
-        val_loss = validate(model, val_loader, criterion, device)
+        val_loss = validate(model, val_loader, criterion, device, scaler=scaler)
         
         # Scheduler step
         current_lr = optimizer.param_groups[0]['lr']
@@ -212,7 +243,7 @@ def main(run_name: str):
     logging.info("Evaluating on test set...")
     checkpoint = torch.load(best_model_path, weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
-    test_loss = validate(model, test_loader, criterion, device)
+    test_loss = validate(model, test_loader, criterion, device, scaler=scaler)
     logging.info(f"Test loss: {test_loss:.6f}")
     wandb.log({"test_loss": test_loss})
     
