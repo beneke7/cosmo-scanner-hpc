@@ -1,0 +1,19 @@
+# cosmo-scanner-hpc dependencies
+# Core Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+
+# Experiment Tracking
+wandb>=0.15.0
+
+# Jupyter Support
+jupyter>=1.0.0
+ipykernel>=6.0.0
+
+# Utilities
+tqdm>=4.65.0
