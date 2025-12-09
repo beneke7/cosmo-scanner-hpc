@@ -6,21 +6,34 @@
 
 ---
 
+## Quick Start
+
+```bash
+# Train the model (DES-like data, default)
+./run.sh --run_name my_experiment --epochs 50
+
+# Train with N-body like data (for Quijote)
+./run.sh --data_type 2lpt --epochs 50
+
+# Custom configuration
+./run.sh --data_type des --smoothing 5.0 --batch_size 32 --lr 1e-4
+```
+
 ## Learning Resources
 
 | Resource | Description |
 |----------|-------------|
 | **This README** | Theoretical foundations with physics analogies |
-| [`docs/LEARNING_GUIDE.md`](docs/LEARNING_GUIDE.md) | Comprehensive tutorial covering tensors, autograd, layers, and training |
-| [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) | PyTorch cheatsheet for quick lookup |
-| [`notebooks/02_ml_from_scratch.ipynb`](notebooks/02_ml_from_scratch.ipynb) | **Interactive tutorial** - run code and see outputs! |
-| [`notebooks/01_physics_check.ipynb`](notebooks/01_physics_check.ipynb) | Visualize the cosmological data |
+| [`study/docs/LEARNING_GUIDE.md`](study/docs/LEARNING_GUIDE.md) | Comprehensive tutorial covering tensors, autograd, layers, and training |
+| [`study/docs/QUICK_REFERENCE.md`](study/docs/QUICK_REFERENCE.md) | PyTorch cheatsheet for quick lookup |
+| [`study/notebooks/02_ml_from_scratch.ipynb`](study/notebooks/02_ml_from_scratch.ipynb) | **Interactive tutorial** - run code and see outputs! |
+| [`study/notebooks/01_physics_check.ipynb`](study/notebooks/01_physics_check.ipynb) | Visualize the cosmological data |
 
 **Recommended learning path:**
-1. Start with `notebooks/02_ml_from_scratch.ipynb` for hands-on coding
+1. Start with `study/notebooks/02_ml_from_scratch.ipynb` for hands-on coding
 2. Read this README for theoretical context
-3. Dive into `docs/LEARNING_GUIDE.md` for detailed explanations
-4. Keep `docs/QUICK_REFERENCE.md` open as you code
+3. Dive into `study/docs/LEARNING_GUIDE.md` for detailed explanations
+4. Keep `study/docs/QUICK_REFERENCE.md` open as you code
 
 ---
 
@@ -349,11 +362,11 @@ print(f"Best validation loss: {result['best_val_loss']:.6f}")
 ### Command Line
 
 ```bash
-# Run training module directly
-python -m src.train
+# Train the model
+./run.sh --epochs 50
 
 # Or explore the physics
-jupyter notebook notebooks/01_physics_check.ipynb
+jupyter notebook study/notebooks/01_physics_check.ipynb
 ```
 
 ---
@@ -362,30 +375,63 @@ jupyter notebook notebooks/01_physics_check.ipynb
 
 ```
 cosmo-scanner-hpc/
-├── src/
-│   ├── __init__.py
-│   ├── physics.py      # Universe simulator (GRF generation)
-│   ├── model.py        # Neural network architecture (CosmoNet)
-│   ├── dataset.py      # PyTorch data pipeline
-│   ├── train.py        # Training loop with logging
-│   └── utils.py        # Device handling, utilities
-├── scripts/
-│   └── submit_job.sh   # SLURM script for HPC clusters
-├── notebooks/
-│   └── 01_physics_check.ipynb  # Visualization playground
-├── README.md           # This tutorial
-└── requirements.txt    # Python dependencies
+├── run.sh                   # Main entry point - run training
+├── src/                     # Source modules
+│   ├── physics_lpt.py       # 2LPT physics (N-body like)
+│   ├── physics_lensing.py   # Weak lensing physics (DES-like)
+│   ├── model_hybrid.py      # Hybrid CNN + Power Spectrum model
+│   ├── dataset.py           # Data loading utilities
+│   ├── generate_dataset.py  # Dataset generation
+│   ├── download_quijote.py  # Quijote data download
+│   ├── download_des.py      # DES data download
+│   ├── analyze_real.py      # Data analysis
+│   ├── inference_real.py    # Inference on real data
+│   └── utils.py             # Utilities
+├── train/                   # Training pipeline
+│   ├── config.py            # Configuration & hyperparameters
+│   ├── train.py             # Main training script
+│   ├── models/              # Saved model checkpoints
+│   └── logs/                # Training logs
+├── data/                    # Training data
+│   ├── images/              # Synthetic training images
+│   ├── metadata.csv         # Labels
+│   └── real/                # Quijote & DES data
+├── results/figures/         # Generated plots
+├── study/                   # Learning materials
+│   ├── notebooks/           # Jupyter tutorials
+│   └── docs/                # Documentation
+├── archive/                 # Old/unused code (for reference)
+├── scripts/                 # HPC job scripts
+├── CHANGELOG.md             # Version history
+├── DATA.md                  # Data documentation
+└── README.md                # This file
 ```
+
+### Directory Management Policy
+
+| Directory | Purpose | Rule |
+|-----------|---------|------|
+| `src/` | Active source modules | Only current, working code |
+| `train/` | Training pipeline | `config.py` (params) + `train.py` (main script) |
+| `study/` | Learning materials | Notebooks, docs, tutorials |
+| `archive/` | Old code | Past versions, unused scripts (for reference) |
+| `results/` | Outputs | Figures, evaluation results |
+
+**Guidelines:**
+- Keep `train/` minimal: config at top, one main script
+- Move deprecated code to `archive/` instead of deleting
+- All study materials (notebooks, docs) go in `study/`
 
 ### Module Overview
 
 | Module | Purpose | Key Functions |
 |--------|---------|---------------|
-| `physics.py` | Generate synthetic data | `generate_universe()`, `bbks_transfer_function()` |
-| `model.py` | Define CNN architecture | `CosmoNet` class |
+| `physics_lpt.py` | 2LPT field generation | `generate_2lpt_field()` |
+| `physics_lensing.py` | DES-like κ maps | `generate_des_like_map()` |
+| `model_hybrid.py` | Hybrid architecture | `CosmoNetHybrid` class |
 | `dataset.py` | PyTorch data loading | `CosmoDataset`, `create_dataloaders()` |
-| `train.py` | Training procedure | `train()`, `train_epoch()`, `validate_epoch()` |
-| `utils.py` | Device management | `get_device()`, `setup_logging()` |
+| `train/train.py` | Training procedure | `train()`, `train_epoch()` |
+| `train/config.py` | Configuration | `CONFIG` dict, model definitions |
 
 ---
 
@@ -470,6 +516,34 @@ model = DDP(model, device_ids=[local_rank])
 5. Ravanbakhsh, S., et al. (2017). *Estimating cosmological parameters from the dark matter distribution.* ICML.
 
 6. Villaescusa-Navarro, F., et al. (2021). *The CAMELS project.* ApJ, 915(1), 71.
+
+---
+
+---
+
+## Current Results
+
+### Model Performance (v0.4.0)
+
+| Model | Architecture | Parameters | Test RMSE | Notes |
+|-------|--------------|------------|-----------|-------|
+| CosmoNet | 5-layer CNN | 1.2M | 0.050 | Original baseline |
+| CosmoNetHybrid | CNN + Power Spectrum | 1.8M | 0.071 | Dual-branch fusion |
+| **CosmoResNet** | ResNet-18 style | 11.3M | **0.032** | Best performance |
+
+### Training Results
+
+![Training Results](results/figures/resnet_training_results.png)
+
+The ResNet model achieves **RMSE = 0.032** on held-out cosmologies, demonstrating excellent generalization across the Ω_m range [0.2, 0.4].
+
+### Key Findings
+
+1. **Pre-training on synthetic data works well** - The model learns generalizable features
+2. **Fine-tuning requires sufficient data** - 50 samples is not enough; pre-trained model generalizes better
+3. **Domain gap is critical** - Models fail on data generated with different physics
+
+See [`CHANGELOG.md`](CHANGELOG.md) for detailed version history and [`DATA.md`](DATA.md) for dataset documentation.
 
 ---
 
