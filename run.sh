@@ -1,15 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# Cosmo Scanner - Training Script (v0.5.0)
+# Cosmo Scanner - Training Script (v5.3)
 # =============================================================================
 #
-# Usage:
-#   ./run.sh                           # DES-like weak lensing (default)
-#   ./run.sh --data_type des           # DES-like weak lensing
-#   ./run.sh --data_type 2lpt          # N-body like (for Quijote)
-#   ./run.sh --data_type disk          # Pre-generated data
-#   ./run.sh --smoothing 5.0           # Change smoothing scale
-#   ./run.sh --epochs 100              # More epochs
+# STEP 1: Generate synthetic data (run once)
+#   python scripts/generate_synthetic_data.py --num_samples 100000
+#   python scripts/generate_synthetic_data.py --preview_only  # Just preview
+#
+# STEP 2: Train on pre-generated data
+#   ./run.sh --epochs 50               # Train v5.3 on synthetic data
+#   ./run.sh --run_name my_exp         # Custom run name
+#
+# v5.3 Features:
+#   - Pre-generated synthetic data (faster training)
+#   - Tunable parameters in scripts/generate_synthetic_data.py
+#   - Red power spectrum, smoothing, masks, grain
 #
 # =============================================================================
 
@@ -20,13 +25,13 @@ cd "$(dirname "$0")"
 # Activate virtual environment
 source venv/bin/activate
 
-# Set environment variables for optimal performance
+# Set environment variables for optimal GPU performance
 export CUDA_VISIBLE_DEVICES=0
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Run training
 echo "=============================================="
-echo "Cosmo Scanner v0.5.0 Training"
+echo "Cosmo Scanner v5.3 Training"
 echo "=============================================="
 
 python3 train/train.py "$@"

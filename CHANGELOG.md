@@ -4,9 +4,83 @@ All notable changes to the Cosmo Scanner HPC project.
 
 ---
 
+## [v5.3] - 2024-12-10
+
+**Pre-generate data, then train:**
+```bash
+python scripts/generate_synthetic_data.py --num_samples 100000
+./run.sh --epochs 50
+```
+
+### Major Changes
+- **Separated data generation from training**: New `scripts/generate_synthetic_data.py`
+- **Tunable parameters at top of file**: Easy to adjust grain, blur, masks
+- **Pre-generated .npy files**: Faster training, reproducible data
+- **Omega_m range 0-1**: Evenly distributed (configurable)
+
+### Generator Parameters (in `scripts/generate_synthetic_data.py`)
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `SPECTRAL_SLOPE` | -3.0 | Power spectrum slope |
+| `SLOPE_OMEGA_DEPENDENCE` | 0.5 | How slope changes with Ω_m |
+| `SMOOTHING_SIGMA` | 3.0 | Gaussian blur in pixels |
+| `GRAIN_NOISE_STD` | 0.02 | Grain texture amplitude |
+| `GRAIN_SMOOTH` | 0.7 | Grain smoothing |
+| `MIN/MAX_MASKS` | 3-8 | Number of circular masks |
+| `MIN/MAX_MASK_RADIUS` | 4-12 | Mask radius in pixels |
+
+### Usage
+```bash
+# Step 1: Generate data (adjust parameters in script first)
+python scripts/generate_synthetic_data.py --preview_only  # Check preview
+python scripts/generate_synthetic_data.py --num_samples 100000
+
+# Step 2: Train
+./run.sh --epochs 50
+```
+
+---
+
+## [v5.2] - 2024-12-09
+
+**How to train:** `./run.sh --epochs 50`
+
+### Improvements over v5.1
+- **Grainy texture**: Added shape noise (σ_grain=5.0, smooth=0.7) matching real DES pixel-level noise
+- Visually indistinguishable from real DES data when zoomed out
+
+### v5.2 Generator Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Power spectrum | n = -3.0 | Red spectrum (large-scale dominated) |
+| Smoothing | σ = 3.0 px | Large-scale structure smoothing |
+| Grain noise | σ = 5.0 | Shape noise amplitude |
+| Grain smooth | 0.7 px | Slight smoothing of grain |
+| Masks | 3-7 per image | Circular, radius 4-12 px |
+
+### Usage
+```bash
+./run.sh --epochs 50                    # Train v5.2 (50 epochs)
+./run.sh --run_name my_exp --epochs 100 # Custom run name
+```
+
+---
+
+## [v5.1] - 2024-12-09
+
+**How to train:** `./run.sh --data_type des_v51 --epochs 50`
+
+### Improvements over v5.0
+- **Realistic DES generator** (`generate_des_realistic`): Red power spectrum (n=-3) matching real DES statistics
+- **Circular masks**: 3-7 random masks per image (radius 4-12 px) simulating star/galaxy holes
+- **Gaussian smoothing**: σ=3.0 pixels for smooth large-scale features
+- **GPU optimizations**: batch_size=128, num_workers=12, prefetch_factor=4, non_blocking transfers
+
+---
+
 ## [v0.5.0] - 2024-12-09
 
-**How to train:** `./run.sh --epochs 50` (DES-like data) or `./run.sh --data_type 2lpt` (N-body)
+**How to train:** `./run.sh --data_type des --epochs 50` (old DES) or `./run.sh --data_type 2lpt` (N-body)
 
 ### Problem Statement
 From v0.4.0 analysis:
@@ -35,6 +109,19 @@ Generates synthetic convergence (κ) maps matching DES Y3 statistics:
 #### Task 4: RTX Optimizations (`train/train.py`)
 - CosineAnnealingWarmRestarts scheduler
 - channels_last memory format, TF32 precision, AMP
+- Increased batch_size (128), num_workers (12), prefetch_factor (4)
+- non_blocking GPU transfers for CPU-GPU overlap
+
+### Training Results (DES-like, 50 epochs)
+
+| Metric | Value |
+|--------|-------|
+| Best RMSE | **0.0369** |
+| Best Val Loss | 0.00136 |
+| Train Loss (final) | 0.00159 |
+| Time/epoch | ~52s |
+
+Convergence: Stable training with CosineAnnealingWarmRestarts (T₀=10, T_mult=2). Best model at epoch 47.
 
 ### Directory Refactor
 - `study/` - Learning materials (notebooks, docs)

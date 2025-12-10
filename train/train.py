@@ -35,7 +35,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.model_hybrid import CosmoNetHybrid, compute_power_spectrum_fast, count_parameters
 from src.physics_lpt import generate_2lpt_numpy
-from src.physics_lensing import generate_des_like_numpy
+from src.physics_lensing import generate_des_like_numpy, generate_des_realistic
 
 # =============================================================================
 # RTX 5090 OPTIMIZATIONS
@@ -72,11 +72,15 @@ CONFIG = {
     'n_power_bins': 64,
     
     # Training
-    'batch_size': 64,
+    'batch_size': 128,        # Increased for better GPU utilization
     'learning_rate': 3e-4,
     'weight_decay': 1e-3,
     'num_epochs': 50,
     'patience': 15,
+    
+    # DataLoader optimization
+    'num_workers': 12,        # More workers for CPU-bound data gen
+    'prefetch_factor': 4,     # Queue more batches ahead
     
     # Scheduler (CosineAnnealingWarmRestarts)
     'T_0': 10,        # Initial restart period
@@ -84,7 +88,7 @@ CONFIG = {
     'eta_min': 1e-6,  # Minimum learning rate
     
     # Model
-    'dropout': 0.3,
+    'dropout': 0.5,  # Increased to reduce overfitting
     'use_attention': True,
     
     # Mixed precision
@@ -172,6 +176,69 @@ class CosmoDatasetV5(Dataset):
         return field_tensor, target_tensor
 
 
+class SyntheticDataset(Dataset):
+    """
+    Dataset for v5.3 pre-generated synthetic data.
+    
+    Loads .npy files from data/synthetic/images/
+    """
+    
+    def __init__(
+        self,
+        data_dir: str = 'data/synthetic',
+        augment: bool = False,
+        noise_std: float = 0.05
+    ):
+        self.data_dir = Path(data_dir)
+        self.images_dir = self.data_dir / 'images'
+        self.augment = augment
+        self.noise_std = noise_std
+        
+        # Load metadata
+        metadata_file = self.data_dir / 'metadata.csv'
+        self.samples = []
+        with open(metadata_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                self.samples.append({
+                    'filename': row['filename'],
+                    'omega_m': float(row['omega_m'])
+                })
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        
+        # Load numpy array
+        npy_path = self.images_dir / sample['filename']
+        field = np.load(npy_path)
+        
+        # Augmentation
+        if self.augment:
+            # Random flips
+            if np.random.random() > 0.5:
+                field = np.flip(field, axis=1).copy()
+            if np.random.random() > 0.5:
+                field = np.flip(field, axis=0).copy()
+            
+            # Random rotation (90° increments)
+            k = np.random.randint(0, 4)
+            field = np.rot90(field, k).copy()
+            
+            # Add noise
+            if self.noise_std > 0:
+                noise = np.random.normal(0, self.noise_std, field.shape).astype(np.float32)
+                field = np.clip(field + noise, 0, 1)
+        
+        # Convert to tensor
+        field_tensor = torch.from_numpy(field).unsqueeze(0).float()  # (1, H, W)
+        target_tensor = torch.tensor([sample['omega_m']], dtype=torch.float32)
+        
+        return field_tensor, target_tensor
+
+
 class OnlineDataset(Dataset):
     """
     Dataset that generates fields on-the-fly.
@@ -191,6 +258,7 @@ class OnlineDataset(Dataset):
         noise_std: float = 0.05,
         data_type: str = 'des',  # 'des', '2lpt', or 'grf'
         smoothing_arcmin: float = 10.0,  # For DES-like
+        fixed_seed: bool = False,  # For validation: use deterministic samples
     ):
         self.num_samples = num_samples
         self.omega_m_range = omega_m_range
@@ -199,47 +267,67 @@ class OnlineDataset(Dataset):
         self.noise_std = noise_std
         self.data_type = data_type
         self.smoothing_arcmin = smoothing_arcmin
+        self.fixed_seed = fixed_seed
+        
+        # Pre-generate fixed omega_m values for validation
+        if fixed_seed:
+            np.random.seed(42)
+            self.omega_m_values = np.random.uniform(*omega_m_range, num_samples)
     
     def __len__(self):
         return self.num_samples
     
     def __getitem__(self, idx):
-        # Random Ω_m
-        omega_m = np.random.uniform(*self.omega_m_range)
+        # Use fixed or random Ω_m
+        if self.fixed_seed:
+            omega_m = self.omega_m_values[idx]
+            seed = 10000 + idx  # Deterministic seed per sample
+        else:
+            omega_m = np.random.uniform(*self.omega_m_range)
+            seed = None
         
         # Generate field based on data type
         if self.data_type == '2lpt':
-            field = generate_2lpt_numpy(omega_m, size=self.size, seed=None)
+            field = generate_2lpt_numpy(omega_m, size=self.size, seed=seed)
+            # Normalize to [0, 1]
+            field = (field - field.min()) / (field.max() - field.min() + 1e-10)
+        elif self.data_type == 'des_v51':
+            # v5.2: Physics-based DES with visual improvements (masks + grain)
+            field = generate_des_realistic(
+                omega_m, 
+                size=self.size, 
+                seed=seed,
+                smoothing_arcmin=self.smoothing_arcmin,
+                add_masks=True,
+                grain_noise_std=5.0,
+                grain_smooth=0.7
+            )
+            # Already normalized to [0, 1]
         elif self.data_type == 'des':
             field = generate_des_like_numpy(
                 omega_m, 
                 size=self.size, 
-                seed=None,
+                seed=seed,
                 smoothing_arcmin=self.smoothing_arcmin,
                 add_noise=True
             )
-        else:  # 'grf' - use pre-generated data logic
+            # Normalize to [0, 1]
+            field = (field - field.min()) / (field.max() - field.min() + 1e-10)
+        else:  # 'grf'
             field = generate_des_like_numpy(
-                omega_m, size=self.size, seed=None,
+                omega_m, size=self.size, seed=seed,
                 smoothing_arcmin=0.1, add_noise=False
             )
+            field = (field - field.min()) / (field.max() - field.min() + 1e-10)
         
-        # Normalize to [0, 1]
-        field = (field - field.min()) / (field.max() - field.min() + 1e-10)
-        
-        # Augmentation
-        if self.augment:
+        # Augmentation (flips and rotations) - only for training, not fixed validation
+        if self.augment and not self.fixed_seed:
             if np.random.random() > 0.5:
                 field = np.flip(field, axis=1).copy()
             if np.random.random() > 0.5:
                 field = np.flip(field, axis=0).copy()
             k = np.random.randint(0, 4)
             field = np.rot90(field, k).copy()
-            
-            if self.noise_std > 0 and self.data_type != 'des':
-                # DES already has noise built in
-                noise = np.random.normal(0, self.noise_std, field.shape).astype(np.float32)
-                field = np.clip(field + noise, 0, 1)
         
         field_tensor = torch.from_numpy(field).unsqueeze(0).float()
         target_tensor = torch.tensor([omega_m], dtype=torch.float32)
@@ -265,9 +353,9 @@ def train_epoch(
     total_loss = 0.0
     
     for images, targets in loader:
-        # Move to device with channels_last format
-        images = images.to(device, memory_format=torch.channels_last)
-        targets = targets.to(device)
+        # Move to device with channels_last format and non_blocking for overlap
+        images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
         
         optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
         
@@ -301,8 +389,8 @@ def validate(
     
     with torch.no_grad():
         for images, targets in loader:
-            images = images.to(device, memory_format=torch.channels_last)
-            targets = targets.to(device)
+            images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
             
             with autocast('cuda', enabled=use_amp):
                 outputs = model(images)
@@ -376,7 +464,24 @@ def train(
     logging.info(f"Model parameters: {count_parameters(model):,}")
     
     # Create datasets
-    if data_type in ['des', '2lpt', 'grf']:
+    if data_type == 'synthetic':
+        # v5.3: Pre-generated synthetic data
+        logging.info("Using pre-generated synthetic dataset (v5.3)")
+        full_dataset = SyntheticDataset(
+            data_dir='data/synthetic',
+            augment=CONFIG['augment'],
+            noise_std=CONFIG['noise_std']
+        )
+        
+        n_total = len(full_dataset)
+        n_train = int(0.8 * n_total)
+        n_val = n_total - n_train
+        
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            full_dataset, [n_train, n_val],
+            generator=torch.Generator().manual_seed(42)
+        )
+    elif data_type in ['des', '2lpt', 'grf', 'des_v51']:
         logging.info(f"Using online {data_type.upper()} generation")
         train_dataset = OnlineDataset(
             num_samples=int(num_samples * 0.8),
@@ -384,7 +489,8 @@ def train(
             augment=CONFIG['augment'],
             noise_std=CONFIG['noise_std'],
             data_type=data_type,
-            smoothing_arcmin=smoothing_arcmin
+            smoothing_arcmin=smoothing_arcmin,
+            fixed_seed=False  # Random samples each epoch
         )
         val_dataset = OnlineDataset(
             num_samples=int(num_samples * 0.2),
@@ -392,10 +498,11 @@ def train(
             augment=False,
             noise_std=0,
             data_type=data_type,
-            smoothing_arcmin=smoothing_arcmin
+            smoothing_arcmin=smoothing_arcmin,
+            fixed_seed=False  # Random samples - some noise but better generalization
         )
-    else:  # 'disk' - use pre-generated data
-        logging.info("Using pre-generated dataset")
+    else:  # 'disk' - use old pre-generated data
+        logging.info("Using pre-generated dataset (disk)")
         full_dataset = CosmoDatasetV5(
             CONFIG['data_dir'],
             CONFIG['metadata_file'],
@@ -417,17 +524,20 @@ def train(
         train_dataset,
         batch_size=CONFIG['batch_size'],
         shuffle=True,
-        num_workers=8,
+        num_workers=CONFIG['num_workers'],
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        prefetch_factor=CONFIG['prefetch_factor'],
+        drop_last=True  # Consistent batch sizes for better GPU utilization
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=CONFIG['batch_size'] * 2,
         shuffle=False,
-        num_workers=4,
+        num_workers=CONFIG['num_workers'] // 2,
         pin_memory=True,
-        persistent_workers=True
+        persistent_workers=True,
+        prefetch_factor=CONFIG['prefetch_factor']
     )
     
     logging.info(f"Train: {len(train_dataset)} | Val: {len(val_dataset)}")
@@ -527,23 +637,23 @@ def train(
 def main():
     import datetime
     
-    parser = argparse.ArgumentParser(description="Cosmo Scanner v0.5.0 Training")
+    parser = argparse.ArgumentParser(description="Cosmo Scanner v5.3 Training")
     parser.add_argument("--run_name", type=str, default=None, help="Run name (auto-generated if not provided)")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
-    parser.add_argument("--data_type", type=str, default="des", 
-                        choices=["des", "2lpt", "grf", "disk"],
-                        help="Data type: des (weak lensing), 2lpt (N-body), grf (Gaussian), disk (pre-generated)")
-    parser.add_argument("--num_samples", type=int, default=100000, help="Number of samples")
-    parser.add_argument("--smoothing", type=float, default=10.0, help="Smoothing scale for DES (arcmin)")
+    parser.add_argument("--data_type", type=str, default="synthetic", 
+                        choices=["synthetic", "des_v51", "des", "2lpt", "grf", "disk"],
+                        help="Data type: synthetic (v5.3 pre-generated), des_v51, des, 2lpt, grf, disk")
+    parser.add_argument("--num_samples", type=int, default=100000, help="Number of samples (for online generation)")
+    parser.add_argument("--smoothing", type=float, default=10.0, help="Smoothing scale for old DES (arcmin)")
     
     args = parser.parse_args()
     
     # Auto-generate run name if not provided
     if args.run_name is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.run_name = f"v5_{args.data_type}_{timestamp}"
+        args.run_name = f"v53_{args.data_type}_{timestamp}"
     
     # Update config
     CONFIG['num_epochs'] = args.epochs

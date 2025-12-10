@@ -260,6 +260,84 @@ def generate_des_like_numpy(
     return kappa.numpy().astype(np.float32)
 
 
+def generate_des_realistic(
+    omega_m: float,
+    size: int = 256,
+    seed: Optional[int] = None,
+    smoothing_arcmin: float = 10.0,
+    add_masks: bool = True,
+    grain_noise_std: float = 5.0,
+    grain_smooth: float = 0.7,
+) -> np.ndarray:
+    """
+    Generate realistic DES-like weak lensing maps (v5.2).
+    
+    Uses the ORIGINAL physics-based generator (with proper Ω_m dependence)
+    but adds visual improvements: masks and grainy texture.
+    
+    Parameters
+    ----------
+    omega_m : float
+        Matter density parameter (0.1 - 0.5)
+    size : int
+        Map size in pixels
+    seed : int, optional
+        Random seed
+    smoothing_arcmin : float
+        Gaussian smoothing scale in arcmin (default 10.0)
+    add_masks : bool
+        Whether to add circular masks (star/galaxy holes)
+    grain_noise_std : float
+        Grainy texture amplitude (shape noise, default 5.0)
+    grain_smooth : float
+        Smoothing of grain texture (default 0.7)
+        
+    Returns
+    -------
+    np.ndarray
+        DES-like convergence map, shape (size, size), normalized
+    """
+    # Use the ORIGINAL physics-based generator (has proper Ω_m signal!)
+    device = torch.device('cpu')  # CPU for DataLoader compatibility
+    kappa = generate_des_like_map(
+        omega_m, size, seed, 
+        smoothing_arcmin=smoothing_arcmin,
+        add_noise=True,
+        device=device
+    )
+    field = kappa.numpy()
+    
+    # Convert to [0, 255] range for visual processing
+    field = (field - field.min()) / (field.max() - field.min() + 1e-10)
+    field = field * 255
+    
+    # Add grainy texture (shape noise) for visual realism
+    if grain_noise_std > 0:
+        if seed is not None:
+            np.random.seed(seed + 1000)  # Different seed for grain
+        grain = np.random.randn(size, size) * grain_noise_std
+        grain = gaussian_filter(grain, sigma=grain_smooth, mode='wrap')
+        field = field + grain
+    
+    # Add circular masks (3-7 masks, radius 4-12 pixels)
+    if add_masks:
+        if seed is not None:
+            np.random.seed(seed + 2000)  # Different seed for masks
+        y, x = np.ogrid[:size, :size]
+        n_masks = np.random.randint(3, 8)
+        for _ in range(n_masks):
+            cx = np.random.randint(15, size-15)
+            cy = np.random.randint(15, size-15)
+            r = np.random.randint(4, 12)
+            mask = (x - cx)**2 + (y - cy)**2 <= r**2
+            field[mask] = 128  # Gray fill
+    
+    # Clip and normalize back to [0, 1] for model input
+    field = np.clip(field, 0, 255) / 255.0
+    
+    return field.astype(np.float32)
+
+
 # =============================================================================
 # COMPARISON VISUALIZATION
 # =============================================================================

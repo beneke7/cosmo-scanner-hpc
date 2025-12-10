@@ -421,17 +421,31 @@ cosmo-scanner-hpc/
 - Keep `train/` minimal: config at top, one main script
 - Move deprecated code to `archive/` instead of deleting
 - All study materials (notebooks, docs) go in `study/`
+- `src/` contains only active modules - archive old physics/model versions
 
-### Module Overview
+### src/ Module Overview
 
-| Module | Purpose | Key Functions |
-|--------|---------|---------------|
-| `physics_lpt.py` | 2LPT field generation | `generate_2lpt_field()` |
-| `physics_lensing.py` | DES-like κ maps | `generate_des_like_map()` |
-| `model_hybrid.py` | Hybrid architecture | `CosmoNetHybrid` class |
-| `dataset.py` | PyTorch data loading | `CosmoDataset`, `create_dataloaders()` |
-| `train/train.py` | Training procedure | `train()`, `train_epoch()` |
-| `train/config.py` | Configuration | `CONFIG` dict, model definitions |
+| Module | Type | Purpose |
+|--------|------|---------|
+| `model_hybrid.py` | **Core** | Hybrid CNN + Power Spectrum model |
+| `physics_lpt.py` | **Core** | 2LPT field generation (N-body like) |
+| `physics_lensing.py` | **Core** | DES-like weak lensing maps |
+| `dataset.py` | **Core** | PyTorch data loading |
+| `utils.py` | **Core** | Device/logging utilities |
+| `generate_dataset.py` | Utility | Pre-generate datasets to disk |
+| `download_quijote.py` | Utility | Download Quijote simulation data |
+| `download_des.py` | Utility | Download DES survey data |
+| `analyze_real.py` | Utility | Analyze real vs synthetic data |
+| `inference_real.py` | Utility | Run inference on real data |
+
+### train/ Structure
+
+| File | Purpose |
+|------|---------|
+| `config.py` | Hyperparameters, model definitions |
+| `train.py` | Main training script |
+| `models/` | Saved model checkpoints |
+| `logs/` | Training logs |
 
 ---
 
