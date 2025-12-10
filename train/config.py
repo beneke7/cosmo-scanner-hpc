@@ -29,7 +29,7 @@ MODEL_DIR = "train/models"
 # TRAINING HYPERPARAMETERS
 # =============================================================================
 
-# Optimized for RTX 5090 (32GB VRAM)
+# Optimized for modern GPUs (RTX PRO 6000 96GB, A100, H100, etc.)
 BATCH_SIZE = 128  # Reduced for more stable training
 LEARNING_RATE = 3e-4  # Lower LR for stability
 WEIGHT_DECAY = 1e-3  # Increased regularization

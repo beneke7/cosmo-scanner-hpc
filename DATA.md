@@ -4,8 +4,10 @@
 
 ```
 data/
-├── images/              # Synthetic training data (100k samples)
-├── metadata.csv         # Labels for synthetic data
+├── synthetic/           # HPC-generated synthetic data
+│   ├── images/          # 100K JPG images (256×256 grayscale)
+│   ├── metadata.csv     # Labels (filename, omega_m, seed)
+│   └── preview.png      # Sample visualization
 └── real/
     ├── quijote/         # Quijote simulations (known Ω_m)
     ├── des/             # DES Y3 weak lensing maps
@@ -14,17 +16,58 @@ data/
 
 ---
 
-## 1. Synthetic Training Data
+## 1. Synthetic Training Data (HPC)
 
-**Location**: `data/images/` + `data/metadata.csv`
+**Location**: `data/synthetic/images/` + `data/synthetic/metadata.csv`
 
 | Property | Value |
 |----------|-------|
 | Samples | 100,000 |
 | Size | 256×256 grayscale |
-| Format | JPG |
-| Ω_m range | [0.1, 1.0] uniform |
-| Generation | `src/generate_dataset.py` |
+| Format | JPG (quality 95) |
+| File size | ~15KB per image (~1.5GB total) |
+| Ω_m range | [0.1, 0.5] uniform |
+| Generation | `hpc/generate_data_parallel.py` |
+| Physics | BBKS transfer function |
+
+### Physics Model (v6.1)
+
+The synthetic data uses the **BBKS transfer function** for proper cosmological Ω_m dependence:
+
+```python
+# Shape parameter encodes Ω_m
+Γ = Ω_m × h  # where h = 0.7 (Hubble parameter)
+
+# Transfer function
+T(k) = ln(1 + 2.34q) / (2.34q) × [1 + 3.89q + (16.1q)² + (5.46q)³ + (6.71q)⁴]^(-0.25)
+# where q = k / Γ
+
+# Power spectrum
+P(k) = k^n_s × T(k)²  # n_s = 0.965 (spectral index)
+```
+
+This creates images where the **spatial clustering pattern** (not brightness) encodes Ω_m.
+Higher Ω_m → more small-scale power → more fine structure.
+
+### Generation Command
+```bash
+# Activate environment
+source .venv/bin/activate
+
+# Generate 100K samples using 60 CPU workers (~20 seconds)
+./run_hpc.sh --generate-data
+
+# Or manually:
+python hpc/generate_data_parallel.py --num_samples 100000 --num_workers 60
+```
+
+### Metadata Format
+```csv
+filename,omega_m,seed
+sample_0000000.jpg,0.2534,0
+sample_0000001.jpg,0.3821,1
+...
+```
 
 ---
 
@@ -111,6 +154,8 @@ wget https://desdr-server.ncsa.illinois.edu/despublic/y3a2_files/mass_maps/
 
 | Script | Purpose |
 |--------|---------|
+| `hpc/generate_data_parallel.py` | Generate synthetic data (parallel, HPC) |
+| `scripts/generate_synthetic_data.py` | Generate synthetic data (original) |
 | `src/download_quijote.py` | Download Quijote data |
 | `src/download_des.py` | Download DES maps |
 | `src/preprocess_real.py` | Convert to model format |

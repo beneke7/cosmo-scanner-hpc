@@ -2,10 +2,10 @@
 main_v5.py - v0.5.0 Training Pipeline
 ======================================
 
-Optimized for RTX 5090 with:
+Optimized for modern NVIDIA GPUs (RTX 30/40/50 series, RTX PRO 6000, A100, H100):
 1. CosineAnnealingWarmRestarts scheduler (handles loss spikes)
 2. channels_last memory format (faster convolutions)
-3. TF32 precision for matmul (RTX 30/40/50 series)
+3. TF32 precision for matmul (Ampere/Ada/Hopper/Blackwell)
 4. 2LPT physics for realistic synthetic data
 5. Hybrid model with power spectrum branch
 
@@ -38,11 +38,11 @@ from src.physics_lpt import generate_2lpt_numpy
 from src.physics_lensing import generate_des_like_numpy, generate_des_realistic
 
 # =============================================================================
-# RTX 5090 OPTIMIZATIONS
+# GPU OPTIMIZATIONS
 # =============================================================================
 
 def setup_rtx_optimizations():
-    """Configure PyTorch for optimal RTX 5090 performance."""
+    """Configure PyTorch for optimal GPU performance (RTX PRO 6000, A100, H100, etc.)."""
     
     # TF32 for faster matmul on Ampere/Ada/Blackwell
     torch.set_float32_matmul_precision('high')

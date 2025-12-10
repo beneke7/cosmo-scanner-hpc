@@ -4,6 +4,108 @@ All notable changes to the Cosmo Scanner HPC project.
 
 ---
 
+## [v6.1] - 2024-12-10 - Critical Physics Fix
+
+**Fixed broken data generation that caused unstable training.**
+
+### Critical Bug Fix
+The data generation was using a **simplified power law** that barely encoded Ω_m:
+```python
+# BROKEN: Only 0.2 difference in slope across entire Ω_m range!
+n_spectral = -3.0 + 0.5 * (omega_m - 0.3)
+```
+
+Fixed to use proper **BBKS transfer function** with cosmological Ω_m dependence:
+```python
+# FIXED: Proper cosmology with Γ = Ω_m × h shape parameter
+gamma = omega_m * h
+T_k = log(1 + 2.34*q) / (2.34*q) * (1 + 3.89*q + ...)^(-0.25)
+P_k = k^n_s * T_k^2
+```
+
+### Impact
+| Metric | Before | After |
+|--------|--------|-------|
+| Power spectrum t-statistic | 3.7 | **20.8** |
+| Significant k-bins | 14/64 | **35/64** |
+| Model correlation | ~0.06 | Expected ~0.8+ |
+
+### Action Required
+```bash
+# Regenerate dataset with fixed physics
+rm -rf data/synthetic
+./run_hpc.sh --generate-data
+./run_hpc.sh --gpu 0
+```
+
+---
+
+## [v6.0] - 2024-12-10 - HPC Release
+
+**Full HPC optimization with distributed training support.**
+
+### Quick Start
+```bash
+# 1. Setup environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+wandb login
+
+# 2. Generate 100K synthetic dataset (~20 seconds)
+./run_hpc.sh --generate-data
+
+# 3. Train on single GPU
+./run_hpc.sh --gpu 0
+
+# Or with custom settings
+./run_hpc.sh --gpu 0 --epochs 200 --batch-size 256
+```
+
+### New Features
+- **HPC Module** (`hpc/`): Complete rewrite for HPC clusters
+  - `train_hpc.py`: DDP, AMP, torch.compile, gradient checkpointing
+  - `config_hpc.py`: Dataclass-based configuration
+  - `generate_data_parallel.py`: Parallel data generation (60 workers)
+  - SLURM scripts for single-GPU, multi-GPU, multi-node
+
+- **JPG Output**: Changed from NPY to JPG format
+  - ~15KB per image vs ~256KB (17x smaller)
+  - 100K dataset = ~1.5GB vs ~25GB
+
+- **Easy Configuration**: All scripts have `>>> USER CONFIG <<<` sections at top
+
+### Hardware Optimized For
+- **CPU**: 128-core Xeon 6530P (uses 60 workers by default)
+- **GPU**: 2× RTX PRO 6000 96GB (or H100/A100)
+- **RAM**: 512GB
+
+### Training Defaults
+| Parameter | Value |
+|-----------|-------|
+| Batch size | 128 per GPU |
+| Train samples | 90,000 |
+| Val samples | 10,000 |
+| Workers | 32 |
+| Epochs | 100 |
+| Learning rate | 3e-4 |
+
+### File Structure
+```
+hpc/
+├── config_hpc.py           # Configuration dataclasses
+├── train_hpc.py            # Main training script
+├── generate_data_parallel.py # Parallel data generation
+├── README.md               # HPC documentation
+└── slurm/
+    ├── single_gpu.sh       # Single GPU job
+    ├── multi_gpu.sh        # Multi-GPU (DDP)
+    ├── multi_node.sh       # Multi-node
+    └── generate_data.sh    # Data generation job
+```
+
+---
+
 ## [v5.3] - 2024-12-10
 
 **Pre-generate data, then train:**
@@ -322,7 +424,7 @@ not generalizable cosmological features.
 ## [v0.1.0] - 2024-12-08
 
 ### Added
-- **GPU-optimized training** for RTX 5090 (32GB VRAM)
+- **GPU-optimized training** for modern NVIDIA GPUs
   - Batch size: 128 (optimized for memory)
   - Mixed Precision Training (AMP) enabled
   - 16 DataLoader workers with prefetching

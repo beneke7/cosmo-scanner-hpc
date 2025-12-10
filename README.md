@@ -1,22 +1,39 @@
 # cosmo-scanner-hpc
 
-**A Deep Learning Pipeline for Cosmological Parameter Estimation**
+**A Deep Learning Pipeline for Cosmological Parameter Estimation** | v6.1
 
 *A rigorous crash course for Physics PhD students, bridging statistical mechanics, field theory, and modern machine learning.*
 
+### Hardware Tested
+- **GPU**: 2× NVIDIA RTX PRO 6000 (96GB each)
+- **CPU**: 128-core Intel Xeon 6530P
+- **RAM**: 512GB
+
 ---
 
-## Quick Start
+## Quick Start (HPC)
 
 ```bash
-# Train the model (DES-like data, default)
+# 1. Setup environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+wandb login  # Get API key from https://wandb.ai/authorize
+
+# 2. Generate 100K synthetic dataset (~20 seconds)
+./run_hpc.sh --generate-data
+
+# 3. Train on GPU 0
+./run_hpc.sh --gpu 0
+
+# Custom settings
+./run_hpc.sh --gpu 0 --epochs 200 --batch-size 256 --debug
+```
+
+### Original Training (non-HPC)
+```bash
 ./run.sh --run_name my_experiment --epochs 50
-
-# Train with N-body like data (for Quijote)
 ./run.sh --data_type 2lpt --epochs 50
-
-# Custom configuration
-./run.sh --data_type des --smoothing 5.0 --batch_size 32 --lr 1e-4
 ```
 
 ## Learning Resources
@@ -451,63 +468,70 @@ cosmo-scanner-hpc/
 
 ## HPC Deployment
 
+### Quick Start (v6.0)
+
+```bash
+# 1. Setup
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+wandb login
+
+# 2. Generate data (~20 seconds for 100K samples)
+./run_hpc.sh --generate-data
+
+# 3. Train
+./run_hpc.sh --gpu 0                    # Single GPU
+./run_hpc.sh --gpu 0 --epochs 200       # Custom epochs
+./run_hpc.sh --gpu 0 --debug            # Quick test
+```
+
+### HPC Module Structure
+
+```
+hpc/
+├── config_hpc.py           # Dataclass configuration
+├── train_hpc.py            # DDP + AMP + torch.compile
+├── generate_data_parallel.py # Parallel data generation
+├── README.md               # Full HPC documentation
+└── slurm/
+    ├── single_gpu.sh       # Single GPU job
+    ├── multi_gpu.sh        # Multi-GPU (DDP)
+    ├── multi_node.sh       # Multi-node training
+    └── generate_data.sh    # Data generation job
+```
+
 ### SLURM Submission
 
-The `scripts/submit_job.sh` script handles:
-1. Virtual environment creation (if needed)
-2. Dependency installation
-3. GPU detection and diagnostics
-4. Training execution
-
 ```bash
-# Submit to SLURM queue
-sbatch scripts/submit_job.sh
+# Edit config at top of script, then submit
+sbatch hpc/slurm/single_gpu.sh
 
-# Monitor job
+# Monitor
 squeue -u $USER
-
-# Check output
-tail -f logs/cosmo-scanner_<JOB_ID>.out
+tail -f logs/slurm/cosmo-1gpu_<JOB_ID>.out
 ```
 
-### Environment Strategy
+### Hardware Defaults (v6.0)
 
-The script uses a **hybrid environment** approach:
+Optimized for: **128-core Xeon + 2× RTX PRO 6000 96GB**
 
-```bash
-# Check for existing venv
-if [ ! -d ".venv" ]; then
-    python -m venv .venv
-    pip install -r requirements.txt
-fi
-source .venv/bin/activate
-```
-
-This ensures:
-- Isolation from system/Conda environments
-- Reproducibility via `requirements.txt`
-- One-time setup per project
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Batch size | 128 | Per GPU |
+| Workers | 32 | Per GPU |
+| Train samples | 80,000 | From 100K dataset |
+| Val samples | 10,000 | |
+| Image format | JPG | ~15KB each |
 
 ### Scaling Tips
 
-| Parameter | Single GPU | Multi-GPU | Multi-Node |
-|-----------|------------|-----------|------------|
-| Batch size | 32-128 | 256-512 | 1024+ |
-| Workers | 4-8 | 8-16 | 16+ |
-| Learning rate | 1e-3 | Scale with batch | Linear scaling |
+| Setup | Batch/GPU | Workers | LR |
+|-------|-----------|---------|-----|
+| 1 GPU | 128-256 | 32 | 3e-4 |
+| 2 GPU | 128 | 32 | 3e-4 |
+| 4 GPU | 64 | 16 | 6e-4 |
 
-For multi-GPU, use PyTorch's `DistributedDataParallel`:
-
-```python
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-
-# Initialize process group
-dist.init_process_group(backend='nccl')
-
-# Wrap model
-model = DDP(model, device_ids=[local_rank])
-```
+See [`hpc/README.md`](hpc/README.md) for full documentation.
 
 ---
 

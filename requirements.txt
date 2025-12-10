@@ -1,4 +1,6 @@
 # cosmo-scanner-hpc dependencies
+# =============================================================================
+
 # Core Deep Learning
 torch>=2.0.0
 torchvision>=0.15.0
@@ -7,6 +9,7 @@ torchvision>=0.15.0
 numpy>=1.24.0
 scipy>=1.10.0
 matplotlib>=3.7.0
+pandas>=2.0.0
 
 # Experiment Tracking
 wandb>=0.15.0
@@ -17,3 +20,8 @@ ipykernel>=6.0.0
 
 # Utilities
 tqdm>=4.65.0
+Pillow>=9.0.0
+
+# HPC / Distributed Training (optional, usually pre-installed on HPC)
+# torch-distributed  # Included in torch
+# nccl               # System-level, loaded via module
